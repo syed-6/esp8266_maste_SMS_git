@@ -22,16 +22,29 @@ void fw_topic_subscriber(String , String );
 void del_data_received(String , String );
 void data_receiveds(String , String );
 void add_data_received(String , String );
-void publisher(int8_t );
+void publisher();
+void del_response_publisher();
+void add_response_publisher();
+void condition_publish();
 void del_response_publisher(int8_t );
 void KeepALive ();
 void FirmwareUpdates();
-void update_publisher(t_httpUpdate_return );
+void update_publisher(String );
+void wakeup_publish();
+String construct_packet(int, int);
 
 WiFiClient espClient;
 PubSubClient clients(MQTT_SERVER, 1883, espClient);
 PubSubClientTools mqtt(clients);
-
+struct mqttpacket {
+  String mac_id;
+  char master_name[6];
+  char node_name[6];
+  int modes;
+  int Switch;
+  bool Status;
+  int No_of_slave;
+};
 //function for topic 1 callback
 void addition_topic_subscriber(String topic, String message) {
   Sprintln("received");
@@ -86,11 +99,11 @@ void MQTT_BEG() {
     if (clients.connect((char*) client_name.c_str())) {
       Sprintln("MQTT connected");
 
-      mqtt.subscribe("testing/add_node",  addition_topic_subscriber);
-      mqtt.subscribe("testing/delete_node",    delete_topic_subscriber);
-      mqtt.subscribe("testing/condition/#",        condition_topic_subscriber);
-      mqtt.subscribe("testing/update/#", update_topic_subscriber);
-      mqtt.subscribe("testing/fw/#", fw_topic_subscriber);
+      mqtt.subscribe("from_web/add_node",  addition_topic_subscriber);
+      mqtt.subscribe("from_web/delete_node",    delete_topic_subscriber);
+      mqtt.subscribe("from_web/condition/#",        condition_topic_subscriber);
+      mqtt.subscribe("from_web/update/#", update_topic_subscriber);
+      mqtt.subscribe("from_web/fw/#", fw_topic_subscriber);
     } else {
       Sprintln("failed, rc=" + clients.state());
     }
@@ -101,7 +114,7 @@ void FirmwareUpdates()
 {
   WiFiClientSecure client;
   client.setTrustAnchors(&cert);
-  if (!client.connect(host, httpsPort)) {
+  if (!client.connect(hosts, httpsPort)) {
     Sprintln("Connection failed");
     return;
   }
@@ -132,17 +145,17 @@ void FirmwareUpdates()
     switch (ret) {
       case HTTP_UPDATE_FAILED:
         Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
-        update_publisher(ret);
+        update_publisher("HTTP_UPDATE_FAILD");
         break;
 
       case HTTP_UPDATE_NO_UPDATES:
         Sprintln("HTTP_UPDATE_NO_UPDATES");
-        update_publisher(ret);
+        update_publisher("HTTP_UPDATE_NO_UPDATES");
         break;
 
       case HTTP_UPDATE_OK:
         Sprintln("HTTP_UPDATE_OK");
-        update_publisher(ret);
+        update_publisher("HTTP_UPDATE_OK");
         break;
     }
   }
@@ -151,23 +164,183 @@ void FirmwareUpdates()
 void KeepALive() {
   if ((millis() - keepalive_timer) > KEEP_ALIVE_INTERVAL ) {
     keepalive_timer = millis();
-    String message;
-    StaticJsonDocument<200> docs;
-    docs["mac_id"] = WiFi.macAddress();
-    serializeJson(docs, message);
+    String packet = construct_packet(KEEPAlive, PUBLISH_PACKET);
     if (!clients.connected()) {
       MQTT_BEG();
     }
-    mqtt.publish("receive/Keepalive", message);
+    mqtt.publish("from_esp/publish/Keepalive", packet);
     Sprintln("KEEP alive done");
   }
 }
-void update_publisher(t_httpUpdate_return res) {
-  StaticJsonDocument<200> docs;
-  String mes;
-  docs["mac_id"] = WiFi.macAddress();
-  docs["update_status"] = res;
-  serializeJson(docs, mes);
-  mqtt.publish("receive/update_response", mes);
+void update_publisher(String res) {
+  StaticJsonDocument<500> PACKET_MQTT;
+  const size_t CAPACITY = JSON_ARRAY_SIZE(10);
+  JsonArray Slave_data = PACKET_MQTT.to<JsonArray>();
+  for (int i = 0; i < 10; i++) {
+    Slave_data.add(Status[i]);
+  }
+  String mss;
+  PACKET_MQTT["pub_type"] = "update_res";
+  PACKET_MQTT["seq_No"] = seq_No;
+  PACKET_MQTT["Device_Type"] = Device_Type;
+  PACKET_MQTT["App_Type"] = App_Type;
+  PACKET_MQTT["FW_Version"] = FirmwareVer;
+  PACKET_MQTT["boot_reason"] = boot_reason;
+  PACKET_MQTT["error_code"] = error_code;
+  PACKET_MQTT["Mac_Id"] = Mac_Id;
+  PACKET_MQTT["Master_Name"] = Master_Name;
+  PACKET_MQTT["Node_Name"] = Node_Name;
+  PACKET_MQTT["Status"] = LED1_State;
+  PACKET_MQTT["No_of_Slaves"] = No_of_Slaves;
+  PACKET_MQTT["Slave_data"] = Slave_data;
+  PACKET_MQTT["pairing_status"] = device_condition;
+  PACKET_MQTT["Response"] = res;
+  serializeJson(PACKET_MQTT, mss);
+  mqtt.publish("from_esp/response/update", mss);
+}
+
+void wakeup_publish() {
+  String packet = construct_packet(WAKEup, PUBLISH_PACKET);
+  mqtt.publish("from_esp/publish/wakeup", packet);
+  seq_No++;
+}
+void condition_publish() {
+  String packet = construct_packet(CONDition, PUBLISH_PACKET);
+  mqtt.publish("from_esp/publish/condition", packet);
+  seq_No++;
+}
+void publisher() {
+//  Response=true;
+  String packet = construct_packet(CONDition, RESPONSE_PACKET);
+  mqtt.publish("receive/response", packet);
+}
+
+void add_response_publisher() {
+//  Response=true;
+  String packet = construct_packet(ADDition, RESPONSE_PACKET);
+  mqtt.publish("receive/response", packet);
+  
+}
+void del_response_publisher() {
+  
+//  Response=true;
+  String packet = construct_packet(DELEtion, RESPONSE_PACKET);
+  mqtt.publish("receive/response", packet);
+}
+String construct_packet(int type, int reason) {
+  StaticJsonDocument<200> PACKET_MQTT;
+  const size_t CAPACITY = JSON_ARRAY_SIZE(10);
+  JsonArray Slave_data = PACKET_MQTT.to<JsonArray>();
+  for (int i = 0; i < 10; i++) {
+    Slave_data.add(Status[i]);
+  }
+  String mss;
+  if (reason) {
+    switch (type) {
+      case WAKEup: {
+          PACKET_MQTT["pub_type"] = "wakeup";
+          PACKET_MQTT["seq_No"] = seq_No;
+          PACKET_MQTT["Device_Type"] = Device_Type;
+          PACKET_MQTT["App_Type"] = App_Type;
+          PACKET_MQTT["FW_Version"] = FirmwareVer;
+          PACKET_MQTT["boot_reason"] = boot_reason;
+          PACKET_MQTT["error_code"] = error_code;
+          PACKET_MQTT["Mac_Id"] = Mac_Id;
+          PACKET_MQTT["Master_Name"] = Master_Name;
+          PACKET_MQTT["Node_Name"] = Node_Name;
+          PACKET_MQTT["Status"] = LED1_State;
+          PACKET_MQTT["No_of_Slaves"] = No_of_Slaves;
+          PACKET_MQTT["Slave_data"] = Slave_data; // = Status;
+          PACKET_MQTT["pairing_status"] = device_condition;
+          break;
+        }
+
+      case CONDition: {
+          PACKET_MQTT["pub_type"] = "condition_pub";
+          PACKET_MQTT["seq_No"] = seq_No;
+          PACKET_MQTT["Device_Type"] = Device_Type;
+          PACKET_MQTT["App_Type"] = App_Type;
+          PACKET_MQTT["boot_reason"] = boot_reason;
+          PACKET_MQTT["error_code"] = error_code;
+          PACKET_MQTT["Mac_Id"] = Mac_Id;
+          PACKET_MQTT["Master_Name"] = Master_Name;
+          PACKET_MQTT["Node_Name"] = Node_Name;
+          PACKET_MQTT["Status"] = LED1_State;
+          PACKET_MQTT["speed"] = fan_speed;
+          PACKET_MQTT["No_of_Slaves"] = No_of_Slaves;
+          PACKET_MQTT["Slave_data"] = Slave_data; // = Status;
+          PACKET_MQTT["pairing_status"] = device_condition;
+          break;
+        }
+      case KEEPAlive: {
+          PACKET_MQTT["pub_type"] = "KA_pub";
+          PACKET_MQTT["Device_Type"] = Device_Type;
+          PACKET_MQTT["App_Type"] = App_Type;
+          PACKET_MQTT["boot_reason"] = boot_reason;
+          PACKET_MQTT["error_code"] = error_code;
+          PACKET_MQTT["Mac_Id"] = Mac_Id;
+          PACKET_MQTT["Status"] = LED1_State;
+          PACKET_MQTT["Slave_data"] = Slave_data; // = Status;
+          PACKET_MQTT["pairing_status"] = device_condition;
+          break;
+        }
+    }
+  }
+  else {
+    switch (type) {
+      case ADDition: {
+          PACKET_MQTT["pub_type"] = "addition_pub";
+          PACKET_MQTT["Device_Type"] = Device_Type;
+          PACKET_MQTT["App_Type"] = App_Type;
+          PACKET_MQTT["FW_Version"] = FirmwareVer;
+          PACKET_MQTT["Mac_Id"] = Mac_Id;
+          PACKET_MQTT["Master_Name"] = Master_Name;
+          PACKET_MQTT["Node_Name"] = Node_Name;
+          PACKET_MQTT["Status"] = LED1_State;
+          PACKET_MQTT["No_of_Slaves"] = No_of_Slaves;
+          PACKET_MQTT["Slave_data"] = Slave_data; // = Status;
+          PACKET_MQTT["pairing_status"] = device_condition;
+          PACKET_MQTT["Response"] = Response;
+          break;
+        }
+      case DELEtion: {
+          PACKET_MQTT["pub_type"] = "deletion_pub";
+          PACKET_MQTT["Device_Type"] = Device_Type;
+          PACKET_MQTT["App_Type"] = App_Type;
+          PACKET_MQTT["FW_Version"] = FirmwareVer;
+          PACKET_MQTT["boot_reason"] = boot_reason;
+          PACKET_MQTT["error_code"] = error_code;
+          PACKET_MQTT["Mac_Id"] = Mac_Id;
+          PACKET_MQTT["Master_Name"] = Master_Name;
+          PACKET_MQTT["Node_Name"] = Node_Name;
+          PACKET_MQTT["Status"] = LED1_State;
+          PACKET_MQTT["No_of_Slaves"] = No_of_Slaves;
+          PACKET_MQTT["Slave_data"] = Slave_data; // = Status;
+          PACKET_MQTT["pairing_status"] = device_condition;
+          PACKET_MQTT["Response"] = Response;
+          break;
+        }
+      case CONDition: {
+          PACKET_MQTT["pub_type"] = "condition_pub";
+          PACKET_MQTT["seq_No"] = seq_No;
+          PACKET_MQTT["Device_Type"] = Device_Type;
+          PACKET_MQTT["App_Type"] = App_Type;
+          PACKET_MQTT["boot_reason"] = boot_reason;
+          PACKET_MQTT["error_code"] = error_code;
+          PACKET_MQTT["Mac_Id"] = Mac_Id;
+          PACKET_MQTT["Master_Name"] = Master_Name;
+          PACKET_MQTT["Node_Name"] = Node_Name;
+          PACKET_MQTT["Status"] = LED1_State;
+          PACKET_MQTT["speed"] = fan_speed;
+          PACKET_MQTT["No_of_Slaves"] = No_of_Slaves;
+          PACKET_MQTT["Slave_data"] = Slave_data; // = Status;
+          PACKET_MQTT["pairing_status"] = device_condition;
+          PACKET_MQTT["Response"] = Response;
+          break;
+        }
+    }
+  }
+  serializeJson(PACKET_MQTT, mss);
+  return mss;
 }
 #endif

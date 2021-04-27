@@ -1,5 +1,6 @@
 #include <Wire.h>
 #include<EEPROM.h>
+#include "mq.h"
 #include "var_pin.h"
 
 
@@ -11,6 +12,8 @@ void update_status();
 void i2c_eeprom_write_byte( int , unsigned int , byte  );
 byte i2c_eeprom_read_byte( int , int  );
 void i2c_slave_check();
+bool add_device();
+bool remove_device();
 
 void i2c_eeprom_write_byte( int deviceaddress, unsigned int eeaddress, byte data )
 {
@@ -72,6 +75,9 @@ void get_EEprom_status() {
   for (int i = 0; i <= 10; i++) {
     Status[i] = EEPROM.read(i);
   }
+  
+  device_condition=EEPROM.read(Device_status_EEprom_addr);
+  App_Type=EEPROM.read(Device_type_EEprom_addr);
   //set led pin and i2c pin data
   update_status();
 }
@@ -108,6 +114,7 @@ void update_status() {
 
 void update_eeprom() {
   Sprint("updating eeprom finally");
+  noInterrupts();
   for (int i = 0; i < 10; i++) {
     if (EEPROM.read(i) != Status[i]) {
       EEPROM.write(i, Status[i]);
@@ -115,16 +122,19 @@ void update_eeprom() {
     }
   }
   EEPROM.commit();
+  interrupts();
 }
 
 void wire( int addr) {
   if (count > 0)
-  { Wire.beginTransmission(addr);//+8);//slave_I2c_addr[addr];
+  {
+    Wire.beginTransmission(addr);//+8);//slave_I2c_addr[addr];
     Wire.write(Status[addr]); //slave_I2c_state_new[slave_I2c_addr[addr]];
     Wire.endTransmission();
     Sprint("SENT TO Sub slave addr....0x0");
     Sprintln(addr);//slave_I2c_addr[addr];
     Wire.requestFrom(addr, 1); //slave_I2c_addr[addr];
+
     if (Wire.available())
     {
       Status[addr] = Wire.read(); //slave_I2c_state_new[slave_I2c_addr[addr]];
@@ -135,6 +145,9 @@ void wire( int addr) {
       Sprint("NOT RECEIVED FROM Sub slave status=");
       Status[addr] = 0; //slave_I2c_state_new[slave_I2c_addr[addr]];
       Sprintln(Status[addr]); //slave_I2c_state_new[slave_I2c_addr[addr]];
+    }
+    for (int i = 1; i < MAX_I2C_DEV; i++) {
+      Slave_data[i - 1] = Status[i];
     }
   }
   delay(10);
@@ -167,8 +180,37 @@ void i2c_slave_check() {
       }
       if (updates) {
         updates = 0;
+        condition_publish();
         update_eeprom();
       }
     }
   }
+}
+
+bool remove_device(int appty) {
+  if (EEPROM.read(Device_status_EEprom_addr) == 1) {
+    noInterrupts();
+    EEPROM.write(Device_status_EEprom_addr, 0);
+    EEPROM.write(Device_type_EEprom_addr, 0);
+    delay(1);
+    EEPROM.commit();
+    interrupts();
+    Sprintln("device removed successfully");
+    return true;
+  }
+  else return false;
+}
+
+bool add_device( int appty) {
+  if (EEPROM.read(Device_status_EEprom_addr) != 1) {
+    noInterrupts();
+    EEPROM.write(Device_status_EEprom_addr, 1);
+    EEPROM.write(Device_type_EEprom_addr, appty);
+    delay(1);
+    EEPROM.commit();
+    interrupts();
+    Sprintln("device added successfully");
+    return true;
+  }
+  else return false;
 }
